@@ -13,7 +13,9 @@ type Images struct {
 }
 
 type Image struct {
-	ImageId           string   `json:"id"`
+	ImageId           string   `json:"image_id"`
+	Title             string   `json:"title"`
+	Description       string   `json:"description"`
 	Filename          string   `json:"filename"`
 	Uploaded          string   `json:"uploaded"`
 	RequireSignedURLs bool     `json:"requireSignedURLs"`

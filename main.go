@@ -87,7 +87,7 @@ func listImagesDB() []Image {
 	}
 	defer db.Close()
 
-	selectQry := "SELECT filename, uploaded, image_id, category FROM IMAGES"
+	selectQry := "SELECT filename, uploaded, image_id, category, title, description FROM IMAGES"
 
 	rows, err := db.Query(selectQry)
 	if err != nil {
@@ -97,7 +97,7 @@ func listImagesDB() []Image {
 	var images []Image
 	for rows.Next() {
 		var i Image
-		err = rows.Scan(&i.Filename, &i.Uploaded, &i.ImageId, &i.Category)
+		err = rows.Scan(&i.Filename, &i.Uploaded, &i.ImageId, &i.Category, &i.Title, &i.Description)
 		if err != nil {
 			log.Fatalf("Failed to scan row: %v\n", err)
 		}
