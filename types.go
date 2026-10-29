@@ -31,13 +31,13 @@ type Image struct {
 	Uploaded          string   `json:"uploaded"`
 	RequireSignedURLs bool     `json:"requireSignedURLs"`
 	Variants          []string `json:"variants"`
-	Category          int      `json:"category"`
+	Category          string   `json:"category"`
 }
 
 type UploadDTO struct {
 	Title       string                `form:"title"`
 	Description string                `form:"description"`
-	Category    int                   `form:"category" binding:"required"`
+	Category    string                `form:"category" binding:"required"`
 	File        *multipart.FileHeader `form:"file" binding:"required"`
 }
 
