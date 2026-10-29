@@ -1,7 +1,18 @@
 package main
 
-type ImageResponse struct {
+import (
+	"mime/multipart"
+)
+
+type CFListResponse struct {
 	Result   Images   `json:"result"`
+	Success  bool     `json:"success"`
+	Errors   []string `json:"errors"`
+	Messages []string `json:"messages"`
+}
+
+type CFPostResponse struct {
+	Result   Image    `json:"result"`
 	Success  bool     `json:"success"`
 	Errors   []string `json:"errors"`
 	Messages []string `json:"messages"`
@@ -13,7 +24,7 @@ type Images struct {
 }
 
 type Image struct {
-	ImageId           string   `json:"image_id"`
+	ImageId           string   `json:"id"`
 	Title             string   `json:"title"`
 	Description       string   `json:"description"`
 	Filename          string   `json:"filename"`
@@ -21,6 +32,13 @@ type Image struct {
 	RequireSignedURLs bool     `json:"requireSignedURLs"`
 	Variants          []string `json:"variants"`
 	Category          int      `json:"category"`
+}
+
+type UploadDTO struct {
+	Title       string                `form:"title"`
+	Description string                `form:"description"`
+	Category    int                   `form:"category" binding:"required"`
+	File        *multipart.FileHeader `form:"file" binding:"required"`
 }
 
 type Category int
