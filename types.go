@@ -50,3 +50,11 @@ const (
 	Digital
 	Print
 )
+
+func (c Category) String() string {
+	names := []string{"Uncategorized", "Photography", "Sculpture", "Digital", "Print"}
+	if c < 0 || int(c) >= len(names) {
+		return "Uncategorized"
+	}
+	return names[c]
+}

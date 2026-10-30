@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -46,22 +47,39 @@ func main() {
 }
 
 func ginListimagesFromHost(c *gin.Context) {
-	c.IndentedJSON(http.StatusOK, listImagesCF())
+	imgs, err := listImagesCF()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	}
+	c.JSON(http.StatusOK, imgs)
 }
 
 func ginUpdateImages(c *gin.Context) {
-	c.IndentedJSON(http.StatusOK, saveImagesToDatabase(listImagesCF()))
+	imgs, err := listImagesCF()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	}
+	err = saveImagesToDatabase(imgs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	}
+	c.Status(http.StatusOK)
 }
 
 func ginListimagesDB(c *gin.Context) {
-	c.IndentedJSON(http.StatusOK, listImagesDB())
+	imgs, err := listImagesDB()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	}
+	c.JSON(http.StatusOK, imgs)
 }
 
 func ginUpdate(c *gin.Context) {
 	var updatedImg Image
 	err := c.BindJSON(&updatedImg)
 	if err != nil {
-		log.Fatalf("Failed to bind json: %v/n", err)
+		log.Printf("Failed to bind json: %v", err)
+		return
 	}
 	c.JSON(http.StatusOK, updateImage(updatedImg))
 }
@@ -69,50 +87,57 @@ func ginUpdate(c *gin.Context) {
 func ginUpload(c *gin.Context) {
 	var uploadDTO UploadDTO
 	if err := c.ShouldBind(&uploadDTO); err != nil {
-		log.Printf("Failed to bind json: %v\n", err)
+		log.Printf("Failed to bind json: %v", err)
+		return
 	}
-	saveNewImage(uploadDTO)
+	err := saveNewImage(uploadDTO)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ginListimagesDB(c)
 }
 
-func saveImagesToDatabase(images []Image) int {
-	db, err := sql.Open(sqlDriverName, dataSourceName)
-	if err != nil {
-		log.Fatalf("Failed to open database: %v\n", err)
-	}
+func saveImagesToDatabase(images []Image) error {
+	db := openDBConnection()
 	defer db.Close()
 
 	insertSQL := `INSERT OR IGNORE INTO IMAGES (filename, uploaded, requireSignedURLs, image_id) VALUES `
 	var vals []any
-
 	for _, image := range images {
 		insertSQL += "(?,?,?,?),"
 		vals = append(vals, image.Filename, image.Uploaded, image.RequireSignedURLs, image.ImageId)
 	}
 	insertSQL = strings.TrimSuffix(insertSQL, ",")
+
 	stmt, err := db.Prepare(insertSQL)
 	if err != nil {
-		log.Fatalf("Failed to prepare statement: %v\n", err)
+		log.Printf("Failed to prepare statement: %v\n", err)
+		return err
 	}
 	res, err := stmt.Exec(vals...)
 	if err != nil {
-		log.Fatalf("Failed to execute database query: %v\n", err)
+		log.Printf("Failed to execute database query: %v\n", err)
+		return err
 	}
 	rows, _ := res.RowsAffected()
-	return int(rows)
+	if rows == 0 {
+		return errors.New("failed to insert new row in database")
+	}
+
+	return nil
 }
 
-func listImagesDB() []Image {
-	db, err := sql.Open(sqlDriverName, dataSourceName)
-	if err != nil {
-		log.Fatalf("Failed to open database: %v\n", err)
-	}
+func listImagesDB() ([]Image, error) {
+	db := openDBConnection()
 	defer db.Close()
 
 	selectQry := "SELECT filename, uploaded, image_id, category, title, description FROM IMAGES order by id desc"
 
 	rows, err := db.Query(selectQry)
 	if err != nil {
-		log.Fatalf("Failed to select rows from database: %v\n", err)
+		log.Printf("Failed to select rows from database: %v\n", err)
+		return nil, err
 	}
 
 	var images []Image
@@ -120,61 +145,61 @@ func listImagesDB() []Image {
 		var i Image
 		err = rows.Scan(&i.Filename, &i.Uploaded, &i.ImageId, &i.Category, &i.Title, &i.Description)
 		if err != nil {
-			log.Fatalf("Failed to scan row: %v\n", err)
+			log.Printf("Failed to scan row: %v\n", err)
+			return nil, err
 		}
 		images = append(images, i)
 	}
-	return images
+	return images, nil
 }
 
-func listImagesCF() []Image {
+func listImagesCF() ([]Image, error) {
 	listImgsUrl := "https://api.cloudflare.com/client/v4/accounts/400b3f859551ad3d06330ed21b0630dc/images/v2"
 	req, err := http.NewRequest("GET", listImgsUrl, nil)
 	req.Header.Add("Authorization", os.Getenv("imgs_bearer"))
-
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Fatalf("Failed GET request: %v", err)
+		log.Printf("Failed GET request: %v", err)
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Failed with HTTP error code: %s", resp.Status)
+		return nil, err
 	}
 
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Fatalf("Failed with HTTP error code: %s", resp.Status)
-	}
-
 	body, err := io.ReadAll(resp.Body)
 
 	if err != nil {
-		log.Fatalf("Failed to read response body: %v", err)
+		log.Printf("Failed to read response body: %v", err)
+		return nil, err
 	}
 
 	var imageResponse CFListResponse
 	err = json.Unmarshal(body, &imageResponse)
 	if err != nil {
-		log.Fatalf("Failed to unmarshal %v", err)
+		log.Printf("Failed to unmarshal %v", err)
+		return nil, err
 	}
 
-	return imageResponse.Result.Images
+	return imageResponse.Result.Images, nil
 }
 
 func updateImage(updatedImg Image) error {
-	db, err := sql.Open(sqlDriverName, dataSourceName)
-	if err != nil {
-		return err
-	}
+	db := openDBConnection()
 	defer db.Close()
 
 	updateQry := "UPDATE IMAGES SET (title, description, category) = (?,?,?) WHERE image_id = ?"
 
 	stmt, err := db.Prepare(updateQry)
 	if err != nil {
-		log.Fatalf("Failed to prepare statement: %v", err)
+		log.Printf("Failed to prepare statement: %v", err)
 		return err
 	}
 	_, err = stmt.Exec(updatedImg.Title, updatedImg.Description, updatedImg.Category, updatedImg.ImageId)
 	if err != nil {
-		log.Fatalf("Failed to execute statement: %v", err)
+		log.Printf("Failed to execute statement: %v", err)
 		return err
 	}
 	return nil
@@ -227,15 +252,12 @@ func uploadImageToHost(img *multipart.FileHeader) (Image, error) {
 	}
 
 	cfResponse, err := io.ReadAll(resp.Body)
-
-	fmt.Println(string(cfResponse))
 	var body CFPostResponse
 	err = json.Unmarshal(cfResponse, &body)
-
 	return body.Result, nil
 }
 
-func saveNewImage(dto UploadDTO) {
+func saveNewImage(dto UploadDTO) error {
 	newImage, err := uploadImageToHost(dto.File)
 	if err != nil {
 		fmt.Println("Failed to upload image to cloudflare, returning")
@@ -244,14 +266,11 @@ func saveNewImage(dto UploadDTO) {
 	newImage.Title = dto.Title
 	newImage.Description = dto.Description
 	newImage.Category = dto.Category
-	saveImageDB(newImage)
+	return saveImageDB(newImage)
 }
 
-func saveImageDB(i Image) {
-	db, err := sql.Open(sqlDriverName, dataSourceName)
-	if err != nil {
-		log.Fatalf("Failed to open database: %v\n", err)
-	}
+func saveImageDB(i Image) error {
+	db := openDBConnection()
 	defer db.Close()
 
 	insertQry := "INSERT INTO images (image_id, title, description, filename, uploaded, requireSignedURLs, category) values (?,?,?,?,?,?,?)"
@@ -260,5 +279,15 @@ func saveImageDB(i Image) {
 	_, err = stmt.Exec(i.ImageId, i.Title, i.Description, i.Filename, i.Uploaded, i.RequireSignedURLs, i.Category)
 	if err != nil {
 		log.Printf("Failed to execute insert query %v", err)
+		return err
 	}
+	return nil
+}
+
+func openDBConnection() *sql.DB {
+	db, err := sql.Open(sqlDriverName, dataSourceName)
+	if err != nil {
+		log.Fatalf("Failed to open database: %v\n", err)
+	}
+	return db
 }
