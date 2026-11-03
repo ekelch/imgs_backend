@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -27,9 +26,14 @@ var router = gin.Default()
 const sqlDriverName string = "sqlite"
 const dataSourceName string = "/Users/evankelch/Programming/brdBase/brdBase.db"
 
+// const dataSourceName string = "/home/ec2-user/brdBase.db"
+const serverIp string = "localhost:8080"
+
+//const serverIp string = "0.0.0.0:8080"
+
 func main() {
 	router.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173", "https://br.evankel.ch"},
+		AllowOrigins:     []string{"http://localhost:5173", "https://localhost:5173", "https://br.evankel.ch"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Authorization", "Content-Type", "Accept"},
 		ExposeHeaders:    []string{"Content-Length"},
@@ -39,11 +43,12 @@ func main() {
 
 	router.GET("/listFromHost", ginListimagesFromHost)
 	router.GET("/list", ginListimagesDB)
-	router.GET("/update", ginUpdateImages)
+	router.GET("/update", ginResetImages)
 	router.PUT("/updateImg", ginUpdate)
 	router.POST("/upload", ginUpload)
 
-	router.Run("localhost:8080")
+	//router.Run("0.0.0.0:8080")
+	router.Run(serverIp)
 }
 
 func ginListimagesFromHost(c *gin.Context) {
@@ -54,8 +59,16 @@ func ginListimagesFromHost(c *gin.Context) {
 	c.JSON(http.StatusOK, imgs)
 }
 
-func ginUpdateImages(c *gin.Context) {
+func ginResetImages(c *gin.Context) {
 	imgs, err := listImagesCF()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	}
+	if len(imgs) == 0 {
+		log.Println("No images to insert")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "no images to insert"})
+	}
+	err = truncateImagesDatabase()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}
@@ -75,19 +88,19 @@ func ginListimagesDB(c *gin.Context) {
 }
 
 func ginUpdate(c *gin.Context) {
-	var updatedImg Image
+	var updatedImg CFImage
 	err := c.BindJSON(&updatedImg)
 	if err != nil {
-		log.Printf("Failed to bind json: %v", err)
+		log.Printf("ginUpdate: Failed to bind json: %v", err)
 		return
 	}
 	c.JSON(http.StatusOK, updateImage(updatedImg))
 }
 
 func ginUpload(c *gin.Context) {
-	var uploadDTO UploadDTO
+	var uploadDTO ImageUploadDTO
 	if err := c.ShouldBind(&uploadDTO); err != nil {
-		log.Printf("Failed to bind json: %v", err)
+		log.Printf("ginUpload: Failed to bind json: %v", err)
 		return
 	}
 	err := saveNewImage(uploadDTO)
@@ -98,7 +111,19 @@ func ginUpload(c *gin.Context) {
 	ginListimagesDB(c)
 }
 
-func saveImagesToDatabase(images []Image) error {
+func truncateImagesDatabase() error {
+	db := openDBConnection()
+	defer db.Close()
+
+	truncateSql := "DELETE FROM IMAGES"
+	_, err := db.Exec(truncateSql)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func saveImagesToDatabase(images []CFImage) error {
 	db := openDBConnection()
 	defer db.Close()
 
@@ -112,23 +137,18 @@ func saveImagesToDatabase(images []Image) error {
 
 	stmt, err := db.Prepare(insertSQL)
 	if err != nil {
-		log.Printf("Failed to prepare statement: %v\n", err)
+		log.Printf("saveImagesToDatabase: Failed to prepare statement: %v\n", err)
 		return err
 	}
-	res, err := stmt.Exec(vals...)
+	_, err = stmt.Exec(vals...)
 	if err != nil {
-		log.Printf("Failed to execute database query: %v\n", err)
+		log.Printf("saveImagesToDatabase: Failed to execute insert or ignore database query: %v\n", err)
 		return err
 	}
-	rows, _ := res.RowsAffected()
-	if rows == 0 {
-		return errors.New("failed to insert new row in database")
-	}
-
 	return nil
 }
 
-func listImagesDB() ([]Image, error) {
+func listImagesDB() ([]CFImage, error) {
 	db := openDBConnection()
 	defer db.Close()
 
@@ -140,9 +160,9 @@ func listImagesDB() ([]Image, error) {
 		return nil, err
 	}
 
-	var images []Image
+	var images []CFImage
 	for rows.Next() {
-		var i Image
+		var i CFImage
 		err = rows.Scan(&i.Filename, &i.Uploaded, &i.ImageId, &i.Category, &i.Title, &i.Description)
 		if err != nil {
 			log.Printf("Failed to scan row: %v\n", err)
@@ -153,7 +173,7 @@ func listImagesDB() ([]Image, error) {
 	return images, nil
 }
 
-func listImagesCF() ([]Image, error) {
+func listImagesCF() ([]CFImage, error) {
 	listImgsUrl := "https://api.cloudflare.com/client/v4/accounts/400b3f859551ad3d06330ed21b0630dc/images/v2"
 	req, err := http.NewRequest("GET", listImgsUrl, nil)
 	req.Header.Add("Authorization", os.Getenv("imgs_bearer"))
@@ -164,7 +184,7 @@ func listImagesCF() ([]Image, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("Failed with HTTP error code: %s", resp.Status)
+		log.Printf("listimages from cloudflare: get request failed with HTTP error code: %s", resp.Status)
 		return nil, err
 	}
 
@@ -186,7 +206,7 @@ func listImagesCF() ([]Image, error) {
 	return imageResponse.Result.Images, nil
 }
 
-func updateImage(updatedImg Image) error {
+func updateImage(updatedImg CFImage) error {
 	db := openDBConnection()
 	defer db.Close()
 
@@ -205,13 +225,13 @@ func updateImage(updatedImg Image) error {
 	return nil
 }
 
-func uploadImageToHost(img *multipart.FileHeader) (Image, error) {
+func uploadImageToHost(img *multipart.FileHeader) (CFImage, error) {
 	const hostUrl = "https://api.cloudflare.com/client/v4/accounts/400b3f859551ad3d06330ed21b0630dc/images/v1"
 
 	imgFile, err := img.Open()
 	if err != nil {
 		log.Printf("Failed to open img file: %v", err)
-		return Image{}, err
+		return CFImage{}, err
 	}
 	defer imgFile.Close()
 
@@ -220,21 +240,21 @@ func uploadImageToHost(img *multipart.FileHeader) (Image, error) {
 	part, err := writer.CreateFormFile("file", img.Filename)
 	if err != nil {
 		log.Printf("Failed to create form file part: %v", err)
-		return Image{}, err
+		return CFImage{}, err
 	}
 	if _, err = io.Copy(part, imgFile); err != nil {
 		log.Printf("Failed to copy file: %v", err)
-		return Image{}, err
+		return CFImage{}, err
 	}
 	if err = writer.Close(); err != nil {
 		log.Printf("Failed to close writer: %v", err)
-		return Image{}, err
+		return CFImage{}, err
 	}
 
 	postReq, err := http.NewRequest("POST", hostUrl, bodyBuffer)
 	if err != nil {
 		log.Printf("Failed to create post request: %v", err)
-		return Image{}, err
+		return CFImage{}, err
 	}
 	postReq.Header.Add("Authorization", os.Getenv("imgs_bearer"))
 	postReq.Header.Add("Content-Type", writer.FormDataContentType())
@@ -242,13 +262,13 @@ func uploadImageToHost(img *multipart.FileHeader) (Image, error) {
 	resp, err := client.Do(postReq)
 	if err != nil {
 		log.Printf("Failed to execute post request to cloudflare: %v", err)
-		return Image{}, err
+		return CFImage{}, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("Failed to execute post request to cloudflare: %v", err)
-		return Image{}, err
+		return CFImage{}, err
 	}
 
 	cfResponse, err := io.ReadAll(resp.Body)
@@ -257,7 +277,7 @@ func uploadImageToHost(img *multipart.FileHeader) (Image, error) {
 	return body.Result, nil
 }
 
-func saveNewImage(dto UploadDTO) error {
+func saveNewImage(dto ImageUploadDTO) error {
 	newImage, err := uploadImageToHost(dto.File)
 	if err != nil {
 		fmt.Println("Failed to upload image to cloudflare, returning")
@@ -265,11 +285,11 @@ func saveNewImage(dto UploadDTO) error {
 
 	newImage.Title = dto.Title
 	newImage.Description = dto.Description
-	newImage.Category = dto.Category
+	newImage.Category = int(categoryFromString[dto.Category])
 	return saveImageDB(newImage)
 }
 
-func saveImageDB(i Image) error {
+func saveImageDB(i CFImage) error {
 	db := openDBConnection()
 	defer db.Close()
 

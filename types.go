@@ -12,18 +12,18 @@ type CFListResponse struct {
 }
 
 type CFPostResponse struct {
-	Result   Image    `json:"result"`
+	Result   CFImage  `json:"result"`
 	Success  bool     `json:"success"`
 	Errors   []string `json:"errors"`
 	Messages []string `json:"messages"`
 }
 
 type Images struct {
-	Images            []Image `json:"images"`
-	ContinuationToken bool    `json:"continuation_token:"`
+	Images            []CFImage `json:"images"`
+	ContinuationToken bool      `json:"continuation_token:"`
 }
 
-type Image struct {
+type CFImage struct {
 	ImageId           string   `json:"id"`
 	Title             string   `json:"title"`
 	Description       string   `json:"description"`
@@ -31,10 +31,10 @@ type Image struct {
 	Uploaded          string   `json:"uploaded"`
 	RequireSignedURLs bool     `json:"requireSignedURLs"`
 	Variants          []string `json:"variants"`
-	Category          string   `json:"category"`
+	Category          int      `json:"category"`
 }
 
-type UploadDTO struct {
+type ImageUploadDTO struct {
 	Title       string                `form:"title"`
 	Description string                `form:"description"`
 	Category    string                `form:"category" binding:"required"`
@@ -52,9 +52,17 @@ const (
 )
 
 func (c Category) String() string {
-	names := []string{"Uncategorized", "Photography", "Sculpture", "Digital", "Print"}
+	names := []string{"uncategorized", "photography", "sculpture", "digital", "print"}
 	if c < 0 || int(c) >= len(names) {
 		return "Uncategorized"
 	}
 	return names[c]
+}
+
+var categoryFromString = map[string]Category{
+	"uncategorized": Uncategorized,
+	"photography":   Photography,
+	"sculpture":     Sculpture,
+	"digital":       Digital,
+	"print":         Print,
 }
