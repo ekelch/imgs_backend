@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/autotls"
 	"github.com/gin-gonic/gin"
 	_ "github.com/glebarez/go-sqlite"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -24,12 +26,8 @@ var client = &http.Client{
 var router = gin.Default()
 
 const sqlDriverName string = "sqlite"
-const dataSourceName string = "/Users/evankelch/Programming/brdBase/brdBase.db"
 
-// const dataSourceName string = "/home/ec2-user/brdBase.db"
-const serverIp string = "localhost:8080"
-
-//const serverIp string = "0.0.0.0:8080"
+var dataSourceName string
 
 func main() {
 	router.Use(cors.New(cors.Config{
@@ -41,14 +39,29 @@ func main() {
 		MaxAge:           1 * time.Hour,
 	}))
 
-	router.GET("/listFromHost", ginListimagesFromHost)
-	router.GET("/list", ginListimagesDB)
-	router.GET("/update", ginResetImages)
-	router.PUT("/updateImg", ginUpdate)
-	router.POST("/upload", ginUpload)
+	err := router.SetTrustedProxies(nil)
+	if err != nil {
+		log.Fatalf("failed to set trusted proxies %v", err)
+	}
 
-	//router.Run("0.0.0.0:8080")
-	router.Run(serverIp)
+	authorized := router.Group("/admin", gin.BasicAuth(gin.Accounts{
+		os.Getenv("admin_username"): os.Getenv("admin_password"),
+	}))
+
+	router.GET("/list", ginListimagesDB)
+	authorized.GET("/listFromHost", ginListimagesFromHost)
+	authorized.GET("/update", ginResetImages)
+	authorized.PUT("/updateImg", ginUpdate)
+	authorized.POST("/upload", ginUpload)
+
+	switch runtime.GOOS {
+	case "darwin":
+		dataSourceName = "/Users/evankelch/Programming/brdBase/brdBase.db"
+		log.Fatal(router.Run("localhost:8080"))
+	case "linux":
+		dataSourceName = "/home/ec2-user/brdBase.db"
+		log.Fatal(autotls.Run(router, "api.evankel.ch"))
+	}
 }
 
 func ginListimagesFromHost(c *gin.Context) {
